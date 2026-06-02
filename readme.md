@@ -1,3 +1,4 @@
+# Fork that attempts to allow parallel use of both modbustcp TCP and esphome native modbus RTU
 # Universal Modbus-TCP esphome
 # Modbus_TCP (nearly same as original modbus (rtu)  
 
