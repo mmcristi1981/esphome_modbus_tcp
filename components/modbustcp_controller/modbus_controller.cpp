@@ -112,7 +112,7 @@ void ModbusController::on_modbus_read_registers(uint8_t function_code, uint16_t 
            "0x%X.",
            this->address_, function_code, start_address, number_of_registers);
 
-  if (number_of_registers == 0 || number_of_registers > modbus::MAX_NUM_OF_REGISTERS_TO_READ) {
+  if (number_of_registers == 0 || number_of_registers > modbustcp::MAX_NUM_OF_REGISTERS_TO_READ) {
     ESP_LOGW(TAG, "Invalid number of registers %d. Sending exception response.", number_of_registers);
     this->send_error(function_code, ModbusExceptionCode::ILLEGAL_DATA_ADDRESS);
     return;
@@ -176,7 +176,7 @@ void ModbusController::on_modbus_write_registers(uint8_t function_code, const st
 
   if (function_code == ModbusFunctionCode::WRITE_MULTIPLE_REGISTERS) {
     number_of_registers = uint16_t(data[3]) | (uint16_t(data[2]) << 8);
-    if (number_of_registers == 0 || number_of_registers > modbus::MAX_NUM_OF_REGISTERS_TO_WRITE) {
+    if (number_of_registers == 0 || number_of_registers > modbustcp::MAX_NUM_OF_REGISTERS_TO_WRITE) {
       ESP_LOGW(TAG, "Invalid number of registers %d. Sending exception response.", number_of_registers);
       this->send_error(function_code, ModbusExceptionCode::ILLEGAL_DATA_VALUE);
       return;
@@ -340,7 +340,7 @@ void ModbusController::update() {
 // walk through the sensors and determine the register ranges to read
 size_t ModbusController::create_register_ranges_() {
   this->register_ranges_.clear();
-  if (this->parent_->role == modbus::ModbusRole::CLIENT && this->sensorset_.empty()) {
+  if (this->parent_->role == modbustcp::ModbusRole::CLIENT && this->sensorset_.empty()) {
     ESP_LOGW(TAG, "No sensors registered");
     return 0;
   }
