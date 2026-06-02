@@ -4,7 +4,7 @@
 #include "esphome/core/log.h"
 #include "esphome/components/network/util.h"
 
-namespace esphome::modbus {
+namespace esphome::modbustcp {
 
 
 static const char *const TAG = "modbustcp";
