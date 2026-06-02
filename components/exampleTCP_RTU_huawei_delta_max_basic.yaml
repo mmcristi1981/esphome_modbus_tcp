@@ -2,6 +2,10 @@
 #DISCLAIMER: EV charge control not fully tested
 #TODO
 substitutions:
+  huawei_ip: "192.168.1.100"
+  huawei_port: "502"
+  huawei_poll: "1000ms"
+
   ev_rx_pin: GPIO16
   ev_tx_pin: GPIO17
   ev_modbus_address: "1"
@@ -73,9 +77,9 @@ modbus:
 modbustcp:
   - id: huawei_modbus
     type: TCP
-    host: 192.168.1.100 # replace with your fixed huawei MODBUS TCP address
-    port: 502
-    send_wait_time: 1000ms
+    host: ${huawei_ip}
+    port: ${huawei_port}
+    send_wait_time: ${huawei_poll}
 
 modbustcp_controller:
   - id: huawei
