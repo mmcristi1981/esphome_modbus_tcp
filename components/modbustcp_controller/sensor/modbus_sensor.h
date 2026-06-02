@@ -1,6 +1,6 @@
 #pragma once
 
-#include "esphome/components/modbustcp_controller/modbustcp_controller.h"
+#include "esphome/components/modbustcp_controller/modbus_controller.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/core/component.h"
 
