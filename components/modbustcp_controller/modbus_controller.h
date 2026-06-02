@@ -16,9 +16,9 @@ namespace modbustcp_controller {
 
 class ModbusController;
 
-using modbus::ModbusFunctionCode;
-using modbus::ModbusRegisterType;
-using modbus::ModbusExceptionCode;
+using modbustcp::ModbusFunctionCode;
+using modbustcp::ModbusRegisterType;
+using modbustcp::ModbusExceptionCode;
 
 enum class SensorValueType : uint8_t {
   RAW = 0x00,     // variable length
