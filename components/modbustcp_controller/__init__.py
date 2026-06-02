@@ -53,10 +53,10 @@ ModbusController = modbustcp_controller_ns.class_(
 )
 
 SensorItem = modbustcp_controller_ns.struct("SensorItem")
-ServerCourtesyResponse = modbus_controller_ns.struct("ServerCourtesyResponse")
-ServerRegister = modbus_controller_ns.struct("ServerRegister")
+ServerCourtesyResponse = modbustcp_controller_ns.struct("ServerCourtesyResponse")
+ServerRegister = modbustcp_controller_ns.struct("ServerRegister")
 
-ModbusFunctionCode_ns = modbus_controller_ns.namespace("ModbusFunctionCode")
+ModbusFunctionCode_ns = modbustcp_controller_ns.namespace("ModbusFunctionCode")
 ModbusFunctionCode = ModbusFunctionCode_ns.enum("ModbusFunctionCode")
 MODBUS_FUNCTION_CODE = {
     "read_coils": ModbusFunctionCode.READ_COILS,
@@ -69,7 +69,7 @@ MODBUS_FUNCTION_CODE = {
     "write_multiple_registers": ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS,
 }
 
-ModbusRegisterType_ns = modbus_controller_ns.namespace("ModbusRegisterType")
+ModbusRegisterType_ns = modbustcp_controller_ns.namespace("ModbusRegisterType")
 ModbusRegisterType = ModbusRegisterType_ns.enum("ModbusRegisterType")
 
 MODBUS_WRITE_REGISTER_TYPE = {
@@ -84,7 +84,7 @@ MODBUS_REGISTER_TYPE = {
     "read": ModbusRegisterType.READ,
 }
 
-SensorValueType_ns = modbus_controller_ns.namespace("SensorValueType")
+SensorValueType_ns = modbustcp_controller_ns.namespace("SensorValueType")
 SensorValueType = SensorValueType_ns.enum("SensorValueType")
 SENSOR_VALUE_TYPE = {
     "RAW": SensorValueType.RAW,
@@ -134,15 +134,15 @@ CPP_TYPE_REGISTER_MAP = {
     "FP32_R": cg.float_,
 }
 
-ModbusCommandSentTrigger = modbus_controller_ns.class_(
+ModbusCommandSentTrigger = modbustcp_controller_ns.class_(
     "ModbusCommandSentTrigger", automation.Trigger.template(cg.int_, cg.int_)
 )
 
-ModbusOnlineTrigger = modbus_controller_ns.class_(
+ModbusOnlineTrigger = modbustcp_controller_ns.class_(
     "ModbusOnlineTrigger", automation.Trigger.template(cg.int_, cg.int_)
 )
 
-ModbusOfflineTrigger = modbus_controller_ns.class_(
+ModbusOfflineTrigger = modbustcp_controller_ns.class_(
     "ModbusOfflineTrigger", automation.Trigger.template(cg.int_, cg.int_)
 )
 
