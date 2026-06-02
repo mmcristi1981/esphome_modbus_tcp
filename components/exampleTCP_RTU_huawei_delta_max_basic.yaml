@@ -1,0 +1,240 @@
+#Example that uses mmcristi1981 fork of creepystefan/esphome_modbus_tcp to support reading huawei inverter over TCP modbus, and control Delta MAX Basic EV charger via modbus RTU with RS485 conversion board
+#DISCLAIMER: EV charge control not fully tested
+#TODO
+substitutions:
+  ev_rx_pin: GPIO16
+  ev_tx_pin: GPIO17
+  ev_modbus_address: "1"
+
+  ev_min_current_a: "6"
+  ev_voltage: "230"
+  ev_line_voltage: "400"
+  ev_phases: "3"
+
+  ev_max_charge_power_w: "10000"
+  max_grid_import_w: "6000"
+  emergency_grid_import_w: "12000"
+  ramp_step_w: "500"
+
+esphome:
+  name: ev-dynamic-controller
+  platformio_options:
+    lib_ldf_mode: chain+
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+  
+external_components:
+  - source: github://robertklep/esphome-custom-component
+    components: [ custom, custom_component ]
+  - source: github://mmcristi1981/esphome_modbus_tcp
+    components: [ modbustcp, modbustcp_controller ]
+    refresh: 0s
+    
+ota:
+  - platform: esphome
+
+captive_portal:
+
+web_server:
+
+wifi:
+  ssid: #replace with your wifi where huawei inverter modbus is accessible
+  password: #replace with your wifi password
+
+
+  ap:
+    ssid: "" # replace with your ssid for AP backup
+    password: "" #replace with your backup AP pass
+
+logger:
+
+api:
+
+
+uart:
+  id: delta_uart
+  rx_pin: ${ev_rx_pin}
+  tx_pin: ${ev_tx_pin}
+  baud_rate: 19200
+  parity: NONE
+  stop_bits: 1
+  data_bits: 8
+# -----------------------------
+# MODBUS TCP (HUAWEI INVERTER)
+# -----------------------------
+modbus:
+  - id: delta_modbus
+    uart_id: delta_uart
+    send_wait_time: 250ms
+
+modbustcp:
+  - id: huawei_modbus
+    type: TCP
+    host: 192.168.1.100 # replace with your fixed huawei MODBUS TCP address
+    port: 502
+    send_wait_time: 1000ms
+
+modbustcp_controller:
+  - id: huawei
+    modbustcp_id: huawei_modbus
+    address: 1
+    update_interval: 5s
+    setup_priority: -100
+
+modbus_controller:
+  - id: delta
+    modbus_id: delta_modbus
+    address: ${ev_modbus_address}
+    setup_priority: -10
+    update_interval: 2s
+    
+globals:
+  - id: last_evse_state
+    type: int
+    restore_value: no
+    initial_value: "-1"
+
+  - id: ev_target_power_w
+    type: int
+    restore_value: no
+    initial_value: "0"
+
+number:
+  - platform: modbus_controller
+    modbus_controller_id: delta
+    id: ev_power_limit
+    name: "EV Charger Power Limit"
+    internal: true
+    address: 1600
+    value_type: S_DWORD
+    min_value: 0
+    max_value: 11000
+    step: 100
+    use_write_multiple: true
+
+# -----------------------------
+# SENSORS
+# -----------------------------
+sensor:
+  - platform: modbustcp_controller
+    modbustcp_controller_id: huawei
+    name: "PV Power"
+    id: pv_power
+    register_type: holding
+    address: 32064
+    value_type: S_DWORD
+    unit_of_measurement: W
+
+  - platform: modbustcp_controller
+    modbustcp_controller_id: huawei
+    name: "Grid Power"
+    id: grid_power
+    register_type: holding
+    address: 37113
+    value_type: S_DWORD
+    unit_of_measurement: W
+
+  - platform: modbus_controller
+    modbus_controller_id: delta
+    name: "EV Charging Power"
+    id: ev_charging_power
+    register_type: read
+    address: 1005
+    value_type: U_DWORD
+    unit_of_measurement: W
+
+  - platform: modbus_controller
+    modbus_controller_id: delta
+    name: "EV Charging Current"
+    id: delta_current
+    register_type: read
+    address: 1007
+    value_type: U_DWORD
+    unit_of_measurement: A
+    filters:
+      - multiply: 0.01
+
+  - platform: modbus_controller
+    modbus_controller_id: delta
+    name: "EVSE State"
+    id: evse_state
+    register_type: read
+    address: 1000
+    value_type: U_WORD
+    internal: true
+
+# -----------------------------
+# LOG OUTPUT (DEBUG LOOP)
+# -----------------------------
+interval:
+  - interval: 5s
+    then:
+      - logger.log:
+          format: "PV: %.1f W | Grid: %.1f W"
+          args: [ 'id(pv_power).state', 'id(grid_power).state' ]
+      - lambda: |-
+          if (isnan(id(grid_power).state) || isnan(id(evse_state).state)) {
+            ESP_LOGD("ev", "Waiting for valid grid/EVSE values");
+            return;
+          }
+
+          const int min_power = (int)(1.732 * ${ev_line_voltage} * ${ev_min_current_a});
+          const int max_charge = ${ev_max_charge_power_w};
+          const int max_grid = ${max_grid_import_w};
+          const int emergency_grid = ${emergency_grid_import_w};
+          const int step = ${ramp_step_w};
+
+          const float grid = id(grid_power).state;
+          const int state = (int) id(evse_state).state;
+
+          const char* state_text = "Unknown";
+
+          switch (state) {
+            case 0: state_text = "Charging process not started (no vehicle connected)"; break;
+            case 1: state_text = "Connected, waiting for release"; break;
+            case 2: state_text = "Charging process starts"; break;
+            case 3: state_text = "Charging"; break;
+            case 4: state_text = "Suspended (loading paused)"; break;
+            case 5: state_text = "Charging process successfully completed (vehicle still plugged in)"; break;
+            case 6: state_text = "Charging process completed by user (vehicle still plugged in)"; break;
+            case 7: state_text = "Charging ended with error (vehicle still connected)"; break;
+          }
+
+          if (state != id(last_evse_state)) {
+            ESP_LOGI("ev", "EVSE state changed: %d = %s", state, state_text);
+            id(last_evse_state) = state;
+          }
+
+          // Delta EVSE state: 0 unavailable, 1 available, 2 occupied,
+          // 3 preparing, 4 charging, etc.
+          const bool car_plugged = state >= 2 && state <= 7;
+
+          int target = id(ev_target_power_w);
+
+          if (!car_plugged) {
+            target = 0;
+          } else {
+            if (target == 0 && grid < max_grid) {
+              target = min_power;
+            } else if (grid > emergency_grid && target <= min_power) {
+              target = 0;
+            } else if (grid > max_grid) {
+              target -= (int)(grid - max_grid);
+            } else if (grid < max_grid && target > 0) {
+              target += step;
+            }
+            if (target < 0) target = 0;
+            if (target > max_charge) target = max_charge;
+            if (target > 0 && target < min_power) target = min_power;
+          }
+
+          if (target != id(ev_target_power_w)) {
+            ESP_LOGD("ev", "EV state=%d grid=%.0fW -> charge limit %dW", state, grid, target);
+            id(ev_target_power_w) = target;
+            auto call = id(ev_power_limit).make_call();
+            call.set_value(target);
+            call.perform();
+          }
