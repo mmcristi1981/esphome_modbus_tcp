@@ -1,4 +1,4 @@
-#include "modbustcp_controller.h"
+#include "modbus_controller.h"
 #include "esphome/core/application.h"
 #include "esphome/core/log.h"
 
@@ -7,7 +7,7 @@ namespace modbustcp_controller {
 
 static const char *const TAG = "modbustcp_controller";
 
-void ModbusTCPController::setup() { this->create_register_ranges_(); }
+void ModbusController::setup() { this->create_register_ranges_(); }
 
 /*
  To work with the existing modbus class and avoid polling for responses a command queue is used.
@@ -15,12 +15,12 @@ void ModbusTCPController::setup() { this->create_register_ranges_(); }
  to handle the response from the device.
  Once the response has been processed it is removed from the queue and the next command is sent
 */
-
-bool ModbusTCPController::send_next_command_() {
+bool ModbusController::send_next_command_() {
   uint32_t last_send = millis() - this->last_command_timestamp_;
 
   if ((last_send > this->command_throttle_) && !waiting_for_response() && !this->command_queue_.empty()) {
     auto &command = this->command_queue_.front();
+
     // remove from queue if command was sent too often
     if (!command->should_retry(this->max_cmd_retries_)) {
       if (!this->module_offline_) {
@@ -55,11 +55,10 @@ bool ModbusTCPController::send_next_command_() {
     }
   }
   return (!this->command_queue_.empty());
-
 }
 
 // Queue incoming response
-void ModbusTCPController::on_modbus_data(const std::vector<uint8_t> &data) {
+void ModbusController::on_modbus_data(const std::vector<uint8_t> &data) {
   auto &current_command = this->command_queue_.front();
   if (current_command != nullptr) {
     if (this->module_offline_) {
@@ -85,13 +84,13 @@ void ModbusTCPController::on_modbus_data(const std::vector<uint8_t> &data) {
 }
 
 // Dispatch the response to the registered handler
-void ModbusTCPController::process_modbus_data_(const ModbusCommandItem *response) {
+void ModbusController::process_modbus_data_(const ModbusCommandItem *response) {
   ESP_LOGV(TAG, "Process modbus response for address 0x%X size: %zu", response->register_address,
            response->payload.size());
   response->on_data_func(response->register_type, response->register_address, response->payload);
 }
 
-void ModbusTCPController::on_modbus_error(uint8_t function_code, uint8_t exception_code) {
+void ModbusController::on_modbus_error(uint8_t function_code, uint8_t exception_code) {
   ESP_LOGE(TAG, "Modbus error function code: 0x%X exception: %d ", function_code, exception_code);
   // Remove pending command waiting for a response
   auto &current_command = this->command_queue_.front();
@@ -106,12 +105,18 @@ void ModbusTCPController::on_modbus_error(uint8_t function_code, uint8_t excepti
   }
 }
 
-void ModbusTCPController::on_modbus_read_registers(uint8_t function_code, uint16_t start_address,
+void ModbusController::on_modbus_read_registers(uint8_t function_code, uint16_t start_address,
                                                 uint16_t number_of_registers) {
   ESP_LOGD(TAG,
            "Received read holding/input registers for device 0x%X. FC: 0x%X. Start address: 0x%X. Number of registers: "
            "0x%X.",
            this->address_, function_code, start_address, number_of_registers);
+
+  if (number_of_registers == 0 || number_of_registers > modbus::MAX_NUM_OF_REGISTERS_TO_READ) {
+    ESP_LOGW(TAG, "Invalid number of registers %d. Sending exception response.", number_of_registers);
+    this->send_error(function_code, ModbusExceptionCode::ILLEGAL_DATA_ADDRESS);
+    return;
+  }
 
   std::vector<uint16_t> sixteen_bit_response;
   for (uint16_t current_address = start_address; current_address < start_address + number_of_registers;) {
@@ -137,9 +142,21 @@ void ModbusTCPController::on_modbus_read_registers(uint8_t function_code, uint16
     }
 
     if (!found) {
-      ESP_LOGW(TAG, "Could not match any register to address %02X. Sending exception response.", current_address);
-      send_error(function_code, 0x02);
-      return;
+      if (this->server_courtesy_response_.enabled &&
+          (current_address <= this->server_courtesy_response_.register_last_address)) {
+        ESP_LOGD(TAG,
+                 "Could not match any register to address 0x%02X, but default allowed. "
+                 "Returning default value: %d.",
+                 current_address, this->server_courtesy_response_.register_value);
+        sixteen_bit_response.push_back(this->server_courtesy_response_.register_value);
+        current_address += 1;  // Just increment by 1, as the default response is a single register
+      } else {
+        ESP_LOGW(TAG,
+                 "Could not match any register to address 0x%02X and default not allowed. Sending exception response.",
+                 current_address);
+        this->send_error(function_code, ModbusExceptionCode::ILLEGAL_DATA_ADDRESS);
+        return;
+      }
     }
   }
 
@@ -153,31 +170,31 @@ void ModbusTCPController::on_modbus_read_registers(uint8_t function_code, uint16
   this->send(function_code, start_address, number_of_registers, response.size(), response.data());
 }
 
-void ModbusTCPController::on_modbus_write_registers(uint8_t function_code, const std::vector<uint8_t> &data) {
+void ModbusController::on_modbus_write_registers(uint8_t function_code, const std::vector<uint8_t> &data) {
   uint16_t number_of_registers;
   uint16_t payload_offset;
 
-  if (function_code == 0x10) {
+  if (function_code == ModbusFunctionCode::WRITE_MULTIPLE_REGISTERS) {
     number_of_registers = uint16_t(data[3]) | (uint16_t(data[2]) << 8);
-    if (number_of_registers == 0 || number_of_registers > 0x7B) {
+    if (number_of_registers == 0 || number_of_registers > modbus::MAX_NUM_OF_REGISTERS_TO_WRITE) {
       ESP_LOGW(TAG, "Invalid number of registers %d. Sending exception response.", number_of_registers);
-      send_error(function_code, 3);
+      this->send_error(function_code, ModbusExceptionCode::ILLEGAL_DATA_VALUE);
       return;
     }
     uint16_t payload_size = data[4];
     if (payload_size != number_of_registers * 2) {
       ESP_LOGW(TAG, "Payload size of %d bytes is not 2 times the number of registers (%d). Sending exception response.",
                payload_size, number_of_registers);
-      send_error(function_code, 3);
+      this->send_error(function_code, ModbusExceptionCode::ILLEGAL_DATA_VALUE);
       return;
     }
     payload_offset = 5;
-  } else if (function_code == 0x06) {
+  } else if (function_code == ModbusFunctionCode::WRITE_SINGLE_REGISTER) {
     number_of_registers = 1;
     payload_offset = 2;
   } else {
     ESP_LOGW(TAG, "Invalid function code 0x%X. Sending exception response.", function_code);
-    send_error(function_code, 1);
+    this->send_error(function_code, ModbusExceptionCode::ILLEGAL_FUNCTION);
     return;
   }
 
@@ -212,7 +229,7 @@ void ModbusTCPController::on_modbus_write_registers(uint8_t function_code, const
   if (!for_each_register([](ServerRegister *server_register, uint16_t offset) -> bool {
         return server_register->write_lambda != nullptr;
       })) {
-    send_error(function_code, 1);
+    this->send_error(function_code, ModbusExceptionCode::ILLEGAL_FUNCTION);
     return;
   }
 
@@ -221,7 +238,7 @@ void ModbusTCPController::on_modbus_write_registers(uint8_t function_code, const
         int64_t number = payload_to_number(data, server_register->value_type, offset, 0xFFFFFFFF);
         return server_register->write_lambda(number);
       })) {
-    send_error(function_code, 4);
+    this->send_error(function_code, ModbusExceptionCode::SERVICE_DEVICE_FAILURE);
     return;
   }
 
@@ -233,7 +250,7 @@ void ModbusTCPController::on_modbus_write_registers(uint8_t function_code, const
   this->send_raw(response);
 }
 
-SensorSet ModbusTCPController::find_sensors_(ModbusRegisterType register_type, uint16_t start_address) const {
+SensorSet ModbusController::find_sensors_(ModbusRegisterType register_type, uint16_t start_address) const {
   auto reg_it = std::find_if(
       std::begin(this->register_ranges_), std::end(this->register_ranges_),
       [=](RegisterRange const &r) { return (r.start_address == start_address && r.register_type == register_type); });
@@ -247,7 +264,7 @@ SensorSet ModbusTCPController::find_sensors_(ModbusRegisterType register_type, u
   // not found
   return {};
 }
-void ModbusTCPController::on_register_data(ModbusRegisterType register_type, uint16_t start_address,
+void ModbusController::on_register_data(ModbusRegisterType register_type, uint16_t start_address,
                                         const std::vector<uint8_t> &data) {
   ESP_LOGV(TAG, "data for register address : 0x%X : ", start_address);
 
@@ -258,7 +275,7 @@ void ModbusTCPController::on_register_data(ModbusRegisterType register_type, uin
   }
 }
 
-void ModbusTCPController::queue_command(const ModbusCommandItem &command) {
+void ModbusController::queue_command(const ModbusCommandItem &command) {
   if (!this->allow_duplicate_commands_) {
     // check if this command is already qeued.
     // not very effective but the queue is never really large
@@ -276,7 +293,7 @@ void ModbusTCPController::queue_command(const ModbusCommandItem &command) {
   this->command_queue_.push_back(make_unique<ModbusCommandItem>(command));
 }
 
-void ModbusTCPController::update_range_(RegisterRange &r) {
+void ModbusController::update_range_(RegisterRange &r) {
   ESP_LOGV(TAG, "Range : %X Size: %x (%d) skip: %d", r.start_address, r.register_count, (int) r.register_type,
            r.skip_updates_counter);
   if (r.skip_updates_counter == 0) {
@@ -307,7 +324,7 @@ void ModbusTCPController::update_range_(RegisterRange &r) {
 // Queue the modbus requests to be send.
 // Once we get a response to the command it is removed from the queue and the next command is send
 //
-void ModbusTCPController::update() {
+void ModbusController::update() {
   if (!this->command_queue_.empty()) {
     ESP_LOGV(TAG, "%zu modbus commands already in queue", this->command_queue_.size());
   } else {
@@ -321,9 +338,9 @@ void ModbusTCPController::update() {
 }
 
 // walk through the sensors and determine the register ranges to read
-size_t ModbusTCPController::create_register_ranges_() {
+size_t ModbusController::create_register_ranges_() {
   this->register_ranges_.clear();
-   if (this->sensorset_.empty()) {
+  if (this->parent_->role == modbus::ModbusRole::CLIENT && this->sensorset_.empty()) {
     ESP_LOGW(TAG, "No sensors registered");
     return 0;
   }
@@ -427,13 +444,20 @@ size_t ModbusTCPController::create_register_ranges_() {
   return this->register_ranges_.size();
 }
 
-void ModbusTCPController::dump_config() {
+void ModbusController::dump_config() {
   ESP_LOGCONFIG(TAG,
-                "ModbusTCPController:\n"
+                "ModbusController:\n"
                 "  Address: 0x%02X\n"
                 "  Max Command Retries: %d\n"
-                "  Offline Skip Updates: %d",
-                this->address_, this->max_cmd_retries_, this->offline_skip_updates_);
+                "  Offline Skip Updates: %d\n"
+                "  Server Courtesy Response:\n"
+                "    Enabled: %s\n"
+                "    Register Last Address: 0x%02X\n"
+                "    Register Value: %d",
+                this->address_, this->max_cmd_retries_, this->offline_skip_updates_,
+                this->server_courtesy_response_.enabled ? "true" : "false",
+                this->server_courtesy_response_.register_last_address, this->server_courtesy_response_.register_value);
+
 #if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
   ESP_LOGCONFIG(TAG, "sensormap");
   for (auto &it : this->sensorset_) {
@@ -454,7 +478,7 @@ void ModbusTCPController::dump_config() {
 #endif
 }
 
-void ModbusTCPController::loop() {
+void ModbusController::loop() {
   // Incoming data to process?
   if (!this->incoming_queue_.empty()) {
     auto &message = this->incoming_queue_.front();
@@ -468,12 +492,12 @@ void ModbusTCPController::loop() {
   }
 }
 
-void ModbusTCPController::on_write_register_response(ModbusRegisterType register_type, uint16_t start_address,
+void ModbusController::on_write_register_response(ModbusRegisterType register_type, uint16_t start_address,
                                                   const std::vector<uint8_t> &data) {
   ESP_LOGV(TAG, "Command ACK 0x%X %d ", get_data<uint16_t>(data, 0), get_data<int16_t>(data, 1));
 }
 
-void ModbusTCPController::dump_sensors_() {
+void ModbusController::dump_sensors_() {
   ESP_LOGV(TAG, "sensors");
   for (auto &it : this->sensorset_) {
     ESP_LOGV(TAG, "  Sensor start=0x%X count=%d size=%d offset=%d", it->start_address, it->register_count,
@@ -482,7 +506,7 @@ void ModbusTCPController::dump_sensors_() {
 }
 
 ModbusCommandItem ModbusCommandItem::create_read_command(
-    ModbusTCPController *modbusdevice, ModbusRegisterType register_type, uint16_t start_address, uint16_t register_count,
+    ModbusController *modbusdevice, ModbusRegisterType register_type, uint16_t start_address, uint16_t register_count,
     std::function<void(ModbusRegisterType register_type, uint16_t start_address, const std::vector<uint8_t> &data)>
         &&handler) {
   ModbusCommandItem cmd;
@@ -495,7 +519,7 @@ ModbusCommandItem ModbusCommandItem::create_read_command(
   return cmd;
 }
 
-ModbusCommandItem ModbusCommandItem::create_read_command(ModbusTCPController *modbusdevice,
+ModbusCommandItem ModbusCommandItem::create_read_command(ModbusController *modbusdevice,
                                                          ModbusRegisterType register_type, uint16_t start_address,
                                                          uint16_t register_count) {
   ModbusCommandItem cmd;
@@ -511,7 +535,7 @@ ModbusCommandItem ModbusCommandItem::create_read_command(ModbusTCPController *mo
   return cmd;
 }
 
-ModbusCommandItem ModbusCommandItem::create_write_multiple_command(ModbusTCPController *modbusdevice,
+ModbusCommandItem ModbusCommandItem::create_write_multiple_command(ModbusController *modbusdevice,
                                                                    uint16_t start_address, uint16_t register_count,
                                                                    const std::vector<uint16_t> &values) {
   ModbusCommandItem cmd;
@@ -532,7 +556,7 @@ ModbusCommandItem ModbusCommandItem::create_write_multiple_command(ModbusTCPCont
   return cmd;
 }
 
-ModbusCommandItem ModbusCommandItem::create_write_single_coil(ModbusTCPController *modbusdevice, uint16_t address,
+ModbusCommandItem ModbusCommandItem::create_write_single_coil(ModbusController *modbusdevice, uint16_t address,
                                                               bool value) {
   ModbusCommandItem cmd;
   cmd.modbusdevice = modbusdevice;
@@ -549,7 +573,7 @@ ModbusCommandItem ModbusCommandItem::create_write_single_coil(ModbusTCPControlle
   return cmd;
 }
 
-ModbusCommandItem ModbusCommandItem::create_write_multiple_coils(ModbusTCPController *modbusdevice, uint16_t start_address,
+ModbusCommandItem ModbusCommandItem::create_write_multiple_coils(ModbusController *modbusdevice, uint16_t start_address,
                                                                  const std::vector<bool> &values) {
   ModbusCommandItem cmd;
   cmd.modbusdevice = modbusdevice;
@@ -581,7 +605,7 @@ ModbusCommandItem ModbusCommandItem::create_write_multiple_coils(ModbusTCPContro
   return cmd;
 }
 
-ModbusCommandItem ModbusCommandItem::create_write_single_command(ModbusTCPController *modbusdevice, uint16_t start_address,
+ModbusCommandItem ModbusCommandItem::create_write_single_command(ModbusController *modbusdevice, uint16_t start_address,
                                                                  uint16_t value) {
   ModbusCommandItem cmd;
   cmd.modbusdevice = modbusdevice;
@@ -601,7 +625,7 @@ ModbusCommandItem ModbusCommandItem::create_write_single_command(ModbusTCPContro
 }
 
 ModbusCommandItem ModbusCommandItem::create_custom_command(
-    ModbusTCPController *modbusdevice, const std::vector<uint8_t> &values,
+    ModbusController *modbusdevice, const std::vector<uint8_t> &values,
     std::function<void(ModbusRegisterType register_type, uint16_t start_address, const std::vector<uint8_t> &data)>
         &&handler) {
   ModbusCommandItem cmd;
@@ -620,7 +644,7 @@ ModbusCommandItem ModbusCommandItem::create_custom_command(
 }
 
 ModbusCommandItem ModbusCommandItem::create_custom_command(
-    ModbusTCPController *modbusdevice, const std::vector<uint16_t> &values,
+    ModbusController *modbusdevice, const std::vector<uint16_t> &values,
     std::function<void(ModbusRegisterType register_type, uint16_t start_address, const std::vector<uint8_t> &data)>
         &&handler) {
   ModbusCommandItem cmd = {};
@@ -790,17 +814,17 @@ int64_t payload_to_number(const std::vector<uint8_t> &data, SensorValueType sens
   return value;
 }
 
-void ModbusTCPController::add_on_command_sent_callback(std::function<void(int, int)> &&callback) {
+void ModbusController::add_on_command_sent_callback(std::function<void(int, int)> &&callback) {
   this->command_sent_callback_.add(std::move(callback));
 }
 
-void ModbusTCPController::add_on_online_callback(std::function<void(int, int)> &&callback) {
+void ModbusController::add_on_online_callback(std::function<void(int, int)> &&callback) {
   this->online_callback_.add(std::move(callback));
 }
 
-void ModbusTCPController::add_on_offline_callback(std::function<void(int, int)> &&callback) {
+void ModbusController::add_on_offline_callback(std::function<void(int, int)> &&callback) {
   this->offline_callback_.add(std::move(callback));
 }
 
-}  // namespace modbustcp_controller
+}  // namespace modbus_controller
 }  // namespace esphome

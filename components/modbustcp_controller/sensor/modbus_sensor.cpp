@@ -1,5 +1,5 @@
 
-#include "modbustcp_sensor.h"
+#include "modbus_sensor.h"
 #include "esphome/core/log.h"
 
 namespace esphome {
@@ -7,9 +7,9 @@ namespace modbustcp_controller {
 
 static const char *const TAG = "modbustcp_controller.sensor";
 
-void ModbusTCPSensor::dump_config() { LOG_SENSOR(TAG, "Modbus Controller Sensor", this); }
+void ModbusSensor::dump_config() { LOG_SENSOR(TAG, "Modbus Controller Sensor", this); }
 
-void ModbusTCPSensor::parse_and_publish(const std::vector<uint8_t> &data) {
+void ModbusSensor::parse_and_publish(const std::vector<uint8_t> &data) {
   float result = payload_to_float(data, *this);
 
   // Is there a lambda registered

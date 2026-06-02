@@ -1,12 +1,16 @@
 
-#include "modbustcp_switch.h"
+#include "modbus_switch.h"
+#include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 namespace esphome {
 namespace modbustcp_controller {
 
-static const char *const TAG = "modbus_tcp_controller.switch";
+static const char *const TAG = "modbustcp_controller.switch";
 
-void ModbusTCPSwitch::setup() {
+// Maximum bytes to log in verbose hex output
+static constexpr size_t MODBUS_SWITCH_MAX_LOG_BYTES = 64;
+
+void ModbusSwitch::setup() {
   optional<bool> initial_state = Switch::get_initial_state_with_restore_mode();
   if (initial_state.has_value()) {
     // if it has a value, restore_mode is not "DISABLED", therefore act on the switch:
@@ -17,13 +21,13 @@ void ModbusTCPSwitch::setup() {
     }
   }
 }
-void ModbusTCPSwitch::dump_config() { LOG_SWITCH(TAG, "Modbus TCP Controller Switch", this); }
+void ModbusSwitch::dump_config() { LOG_SWITCH(TAG, "Modbus Controller Switch", this); }
 
-void ModbusTCPSwitch::set_assumed_state(bool assumed_state) { this->assumed_state_ = assumed_state; }
+void ModbusSwitch::set_assumed_state(bool assumed_state) { this->assumed_state_ = assumed_state; }
 
-bool ModbusTCPSwitch::assumed_state() { return this->assumed_state_; }
+bool ModbusSwitch::assumed_state() { return this->assumed_state_; }
 
-void ModbusTCPSwitch::parse_and_publish(const std::vector<uint8_t> &data) {
+void ModbusSwitch::parse_and_publish(const std::vector<uint8_t> &data) {
   bool value = false;
   switch (this->register_type) {
     case ModbusRegisterType::DISCRETE_INPUT:
@@ -52,7 +56,7 @@ void ModbusTCPSwitch::parse_and_publish(const std::vector<uint8_t> &data) {
   this->publish_state(value);
 }
 
-void ModbusTCPSwitch::write_state(bool state) {
+void ModbusSwitch::write_state(bool state) {
   // This will be called every time the user requests a state change.
   ModbusCommandItem cmd;
   std::vector<uint8_t> data;
@@ -71,7 +75,11 @@ void ModbusTCPSwitch::write_state(bool state) {
     }
   }
   if (!data.empty()) {
-    ESP_LOGV(TAG, "Modbus TCP Switch write raw: %s", format_hex_pretty(data).c_str());
+#if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
+    char hex_buf[format_hex_pretty_size(MODBUS_SWITCH_MAX_LOG_BYTES)];
+#endif
+    ESP_LOGV(TAG, "Modbus Switch write raw: %s",
+             format_hex_pretty_to(hex_buf, sizeof(hex_buf), data.data(), data.size()));
     cmd = ModbusCommandItem::create_custom_command(
         this->parent_, data,
         [this, cmd](ModbusRegisterType register_type, uint16_t start_address, const std::vector<uint8_t> &data) {

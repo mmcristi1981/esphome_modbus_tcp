@@ -3,6 +3,7 @@ import binascii
 from esphome import automation
 import esphome.codegen as cg
 from esphome.components import modbustcp
+from esphome.components.const import CONF_ENABLED
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ADDRESS,
@@ -22,22 +23,24 @@ from .const import (
     CONF_CUSTOM_COMMAND,
     CONF_FORCE_NEW_RANGE,
     CONF_MAX_CMD_RETRIES,
-    CONF_MODBUSTCP_CONTROLLER_ID,
+    CONF_MODBUS_CONTROLLER_ID,
     CONF_OFFLINE_SKIP_UPDATES,
     CONF_ON_COMMAND_SENT,
     CONF_ON_OFFLINE,
     CONF_ON_ONLINE,
     CONF_REGISTER_COUNT,
+    CONF_REGISTER_LAST_ADDRESS,
     CONF_REGISTER_TYPE,
+    CONF_REGISTER_VALUE,
     CONF_RESPONSE_SIZE,
+    CONF_SERVER_COURTESY_RESPONSE,
     CONF_SKIP_UPDATES,
     CONF_VALUE_TYPE,
 )
 
-#CODEOWNERS = ["@martgras"]
+CODEOWNERS = ["@martgras"]
 
-DEPENDENCIES = ["modbustcp"]
-
+AUTO_LOAD = ["modbustcp"]
 
 CONF_READ_LAMBDA = "read_lambda"
 CONF_WRITE_LAMBDA = "write_lambda"
@@ -45,14 +48,15 @@ CONF_SERVER_REGISTERS = "server_registers"
 MULTI_CONF = True
 
 modbustcp_controller_ns = cg.esphome_ns.namespace("modbustcp_controller")
-ModbusTCPController = modbustcp_controller_ns.class_(
-    "ModbusTCPController", cg.PollingComponent, modbustcp.ModbusDevice
+ModbusController = modbustcp_controller_ns.class_(
+    "ModbusController", cg.PollingComponent, modbustcp.ModbusDevice
 )
 
 SensorItem = modbustcp_controller_ns.struct("SensorItem")
-ServerRegister = modbustcp_controller_ns.struct("ServerRegister")
+ServerCourtesyResponse = modbus_controller_ns.struct("ServerCourtesyResponse")
+ServerRegister = modbus_controller_ns.struct("ServerRegister")
 
-ModbusFunctionCode_ns = modbustcp_controller_ns.namespace("ModbusFunctionCode")
+ModbusFunctionCode_ns = modbus_controller_ns.namespace("ModbusFunctionCode")
 ModbusFunctionCode = ModbusFunctionCode_ns.enum("ModbusFunctionCode")
 MODBUS_FUNCTION_CODE = {
     "read_coils": ModbusFunctionCode.READ_COILS,
@@ -65,7 +69,7 @@ MODBUS_FUNCTION_CODE = {
     "write_multiple_registers": ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS,
 }
 
-ModbusRegisterType_ns = modbustcp_controller_ns.namespace("ModbusRegisterType")
+ModbusRegisterType_ns = modbus_controller_ns.namespace("ModbusRegisterType")
 ModbusRegisterType = ModbusRegisterType_ns.enum("ModbusRegisterType")
 
 MODBUS_WRITE_REGISTER_TYPE = {
@@ -80,7 +84,7 @@ MODBUS_REGISTER_TYPE = {
     "read": ModbusRegisterType.READ,
 }
 
-SensorValueType_ns = modbustcp_controller_ns.namespace("SensorValueType")
+SensorValueType_ns = modbus_controller_ns.namespace("SensorValueType")
 SensorValueType = SensorValueType_ns.enum("SensorValueType")
 SENSOR_VALUE_TYPE = {
     "RAW": SensorValueType.RAW,
@@ -130,19 +134,27 @@ CPP_TYPE_REGISTER_MAP = {
     "FP32_R": cg.float_,
 }
 
-ModbusCommandSentTrigger = modbustcp_controller_ns.class_(
+ModbusCommandSentTrigger = modbus_controller_ns.class_(
     "ModbusCommandSentTrigger", automation.Trigger.template(cg.int_, cg.int_)
 )
 
-ModbusOnlineTrigger = modbustcp_controller_ns.class_(
+ModbusOnlineTrigger = modbus_controller_ns.class_(
     "ModbusOnlineTrigger", automation.Trigger.template(cg.int_, cg.int_)
 )
 
-ModbusOfflineTrigger = modbustcp_controller_ns.class_(
+ModbusOfflineTrigger = modbus_controller_ns.class_(
     "ModbusOfflineTrigger", automation.Trigger.template(cg.int_, cg.int_)
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+SERVER_COURTESY_RESPONSE_SCHEMA = cv.Schema(
+    {
+        cv.Optional(CONF_ENABLED, default=False): cv.boolean,
+        cv.Optional(CONF_REGISTER_LAST_ADDRESS, default=0xFFFF): cv.hex_uint16_t,
+        cv.Optional(CONF_REGISTER_VALUE, default=0): cv.hex_uint16_t,
+    }
+)
 
 ModbusServerRegisterSchema = cv.Schema(
     {
@@ -158,11 +170,12 @@ ModbusServerRegisterSchema = cv.Schema(
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
-            cv.GenerateID(): cv.declare_id(ModbusTCPController),
+            cv.GenerateID(): cv.declare_id(ModbusController),
             cv.Optional(CONF_ALLOW_DUPLICATE_COMMANDS, default=False): cv.boolean,
             cv.Optional(
                 CONF_COMMAND_THROTTLE, default="0ms"
             ): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_SERVER_COURTESY_RESPONSE): SERVER_COURTESY_RESPONSE_SCHEMA,
             cv.Optional(CONF_MAX_CMD_RETRIES, default=4): cv.positive_int,
             cv.Optional(CONF_OFFLINE_SKIP_UPDATES, default=0): cv.positive_int,
             cv.Optional(
@@ -193,7 +206,7 @@ CONFIG_SCHEMA = cv.All(
 
 ModbusItemBaseSchema = cv.Schema(
     {
-        cv.GenerateID(CONF_MODBUSTCP_CONTROLLER_ID): cv.use_id(ModbusTCPController),
+        cv.GenerateID(CONF_MODBUS_CONTROLLER_ID): cv.use_id(ModbusController),
         cv.Optional(CONF_ADDRESS): cv.positive_int,
         cv.Optional(CONF_CUSTOM_COMMAND): cv.ensure_list(cv.hex_uint8_t),
         cv.Exclusive(
@@ -233,8 +246,8 @@ def validate_modbus_register(config):
 
 
 def _final_validate(config):
-    if CONF_SERVER_REGISTERS in config:
-        return modbus.final_validate_modbus_device("modbustcp_controller", role="server")(
+    if CONF_SERVER_COURTESY_RESPONSE in config or CONF_SERVER_REGISTERS in config:
+        return modbustcp.final_validate_modbus_device("modbus_controller", role="server")(
             config
         )
     return config
@@ -266,7 +279,7 @@ def modbus_calc_properties(config):
             if isinstance(value, str):
                 value = value.encode()
             config[CONF_ADDRESS] = binascii.crc_hqx(value, 0)
-        config[CONF_REGISTER_TYPE] = ModbusRegisterType.CUSTOM
+        config[CONF_REGISTER_TYPE] = cv.enum(MODBUS_REGISTER_TYPE)("custom")
         config[CONF_FORCE_NEW_RANGE] = True
     return byte_offset, reg_count
 
@@ -300,6 +313,20 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     cg.add(var.set_allow_duplicate_commands(config[CONF_ALLOW_DUPLICATE_COMMANDS]))
     cg.add(var.set_command_throttle(config[CONF_COMMAND_THROTTLE]))
+    if server_courtesy_response := config.get(CONF_SERVER_COURTESY_RESPONSE):
+        cg.add(
+            var.set_server_courtesy_response(
+                cg.StructInitializer(
+                    ServerCourtesyResponse,
+                    ("enabled", server_courtesy_response[CONF_ENABLED]),
+                    (
+                        "register_last_address",
+                        server_courtesy_response[CONF_REGISTER_LAST_ADDRESS],
+                    ),
+                    ("register_value", server_courtesy_response[CONF_REGISTER_VALUE]),
+                )
+            )
+        )
     cg.add(var.set_max_cmd_retries(config[CONF_MAX_CMD_RETRIES]))
     cg.add(var.set_offline_skip_updates(config[CONF_OFFLINE_SKIP_UPDATES]))
     if CONF_SERVER_REGISTERS in config:

@@ -9,9 +9,9 @@
 namespace esphome {
 namespace modbustcp_controller {
 
-class ModbusTCPSensor : public Component, public sensor::Sensor, public SensorItem {
+class ModbusSensor : public Component, public sensor::Sensor, public SensorItem {
  public:
-  ModbusTCPSensor(ModbusRegisterType register_type, uint16_t start_address, uint8_t offset, uint32_t bitmask,
+  ModbusSensor(ModbusRegisterType register_type, uint16_t start_address, uint8_t offset, uint32_t bitmask,
                SensorValueType value_type, int register_count, uint16_t skip_updates, bool force_new_range) {
     this->register_type = register_type;
     this->start_address = start_address;
@@ -25,9 +25,9 @@ class ModbusTCPSensor : public Component, public sensor::Sensor, public SensorIt
 
   void parse_and_publish(const std::vector<uint8_t> &data) override;
   void dump_config() override;
-  using transform_func_t = std::function<optional<float>(ModbusTCPSensor *, float, const std::vector<uint8_t> &)>;
+  using transform_func_t = optional<float> (*)(ModbusSensor *, float, const std::vector<uint8_t> &);
 
-  void set_template(transform_func_t &&f) { this->transform_func_ = f; }
+  void set_template(transform_func_t f) { this->transform_func_ = f; }
 
  protected:
   optional<transform_func_t> transform_func_{nullopt};

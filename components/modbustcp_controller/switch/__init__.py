@@ -15,7 +15,7 @@ from .. import (
 from ..const import (
     CONF_BITMASK,
     CONF_FORCE_NEW_RANGE,
-    CONF_MODBUSTCP_CONTROLLER_ID,
+    CONF_MODBUS_CONTROLLER_ID,
     CONF_REGISTER_TYPE,
     CONF_SKIP_UPDATES,
     CONF_USE_WRITE_MULTIPLE,
@@ -26,12 +26,12 @@ DEPENDENCIES = ["modbustcp_controller"]
 CODEOWNERS = ["@martgras"]
 
 
-ModbusTCPSwitch = modbustcp_controller_ns.class_(
-    "ModbusTCPSwitch", cg.Component, switch.Switch, SensorItem
+ModbusSwitch = modbustcp_controller_ns.class_(
+    "ModbusSwitch", cg.Component, switch.Switch, SensorItem
 )
 
 CONFIG_SCHEMA = cv.All(
-    switch.switch_schema(ModbusTCPSwitch, default_restore_mode="DISABLED")
+    switch.switch_schema(ModbusSwitch, default_restore_mode="DISABLED")
     .extend(cv.COMPONENT_SCHEMA)
     .extend(ModbusItemBaseSchema)
     .extend(
@@ -60,7 +60,7 @@ async def to_code(config):
     await cg.register_component(var, config)
     await switch.register_switch(var, config)
 
-    paren = await cg.get_variable(config[CONF_MODBUSTCP_CONTROLLER_ID])
+    paren = await cg.get_variable(config[CONF_MODBUS_CONTROLLER_ID])
     cg.add(var.set_parent(paren))
     cg.add(var.set_use_write_mutiple(config[CONF_USE_WRITE_MULTIPLE]))
     assumed_state = config[CONF_ASSUMED_STATE]
@@ -71,11 +71,11 @@ async def to_code(config):
         template_ = await cg.process_lambda(
             config[CONF_WRITE_LAMBDA],
             [
-                (ModbusTCPSwitch.operator("ptr"), "item"),
+                (ModbusSwitch.operator("ptr"), "item"),
                 (cg.bool_, "x"),
                 (cg.std_vector.template(cg.uint8).operator("ref"), "payload"),
             ],
             return_type=cg.optional.template(bool),
         )
         cg.add(var.set_write_template(template_))
-    await add_modbus_base_properties(var, config, ModbusTCPSwitch, bool, bool)
+    await add_modbus_base_properties(var, config, ModbusSwitch, bool, bool)

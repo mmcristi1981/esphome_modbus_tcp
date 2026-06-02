@@ -2,9 +2,8 @@
 
 #include "esphome/core/component.h"
 
-#include "esphome/components/modbustcp/modbustcp.h"
+#include "esphome/components/modbustcp/modbus.h"
 #include "esphome/core/automation.h"
-//#include "esphome/components/modbustcp_controller/automation.h"
 
 #include <list>
 #include <queue>
@@ -15,37 +14,11 @@
 namespace esphome {
 namespace modbustcp_controller {
 
-class ModbusTCPController;
+class ModbusController;
 
-enum class ModbusFunctionCode {
-  CUSTOM = 0x00,
-  READ_COILS = 0x01,
-  READ_DISCRETE_INPUTS = 0x02,
-  READ_HOLDING_REGISTERS = 0x03,
-  READ_INPUT_REGISTERS = 0x04,
-  WRITE_SINGLE_COIL = 0x05,
-  WRITE_SINGLE_REGISTER = 0x06,
-  READ_EXCEPTION_STATUS = 0x07,   // not implemented
-  DIAGNOSTICS = 0x08,             // not implemented
-  GET_COMM_EVENT_COUNTER = 0x0B,  // not implemented
-  GET_COMM_EVENT_LOG = 0x0C,      // not implemented
-  WRITE_MULTIPLE_COILS = 0x0F,
-  WRITE_MULTIPLE_REGISTERS = 0x10,
-  REPORT_SERVER_ID = 0x11,               // not implemented
-  READ_FILE_RECORD = 0x14,               // not implemented
-  WRITE_FILE_RECORD = 0x15,              // not implemented
-  MASK_WRITE_REGISTER = 0x16,            // not implemented
-  READ_WRITE_MULTIPLE_REGISTERS = 0x17,  // not implemented
-  READ_FIFO_QUEUE = 0x18,                // not implemented
-};
-
-enum class ModbusRegisterType : uint8_t {
-  CUSTOM = 0x0,
-  COIL = 0x01,
-  DISCRETE_INPUT = 0x02,
-  HOLDING = 0x03,
-  READ = 0x04,
-};
+using modbus::ModbusFunctionCode;
+using modbus::ModbusRegisterType;
+using modbus::ModbusExceptionCode;
 
 enum class SensorValueType : uint8_t {
   RAW = 0x00,     // variable length
@@ -229,7 +202,7 @@ void number_to_payload(std::vector<uint16_t> &data, int64_t value, SensorValueTy
 int64_t payload_to_number(const std::vector<uint8_t> &data, SensorValueType sensor_value_type, uint8_t offset,
                           uint32_t bitmask);
 
-class ModbusTCPController;
+class ModbusController;
 
 class SensorItem {
  public:
@@ -255,6 +228,12 @@ class SensorItem {
   uint16_t skip_updates{0};
   std::vector<uint8_t> custom_data{};
   bool force_new_range{false};
+};
+
+struct ServerCourtesyResponse {
+  bool enabled{false};
+  uint16_t register_last_address{0xFFFF};
+  uint16_t register_value{0};
 };
 
 class ServerRegister {
@@ -292,24 +271,31 @@ class ServerRegister {
 
   // Formats a raw value into a string representation based on the value type for debugging
   std::string format_value(int64_t value) const {
+    // max 44: float with %.1f can be up to 42 chars (3.4e38 → 39 integer digits + sign + decimal + 1 digit)
+    // plus null terminator = 43, rounded to 44 for 4-byte alignment
+    char buf[44];
     switch (this->value_type) {
       case SensorValueType::U_WORD:
       case SensorValueType::U_DWORD:
       case SensorValueType::U_DWORD_R:
       case SensorValueType::U_QWORD:
       case SensorValueType::U_QWORD_R:
-        return std::to_string(static_cast<uint64_t>(value));
+        buf_append_printf(buf, sizeof(buf), 0, "%" PRIu64, static_cast<uint64_t>(value));
+        return buf;
       case SensorValueType::S_WORD:
       case SensorValueType::S_DWORD:
       case SensorValueType::S_DWORD_R:
       case SensorValueType::S_QWORD:
       case SensorValueType::S_QWORD_R:
-        return std::to_string(value);
+        buf_append_printf(buf, sizeof(buf), 0, "%" PRId64, value);
+        return buf;
       case SensorValueType::FP32_R:
       case SensorValueType::FP32:
-        return str_sprintf("%.1f", bit_cast<float>(static_cast<uint32_t>(value)));
+        buf_append_printf(buf, sizeof(buf), 0, "%.1f", bit_cast<float>(static_cast<uint32_t>(value)));
+        return buf;
       default:
-        return std::to_string(value);
+        buf_append_printf(buf, sizeof(buf), 0, "%" PRId64, value);
+        return buf;
     }
   }
 
@@ -320,7 +306,7 @@ class ServerRegister {
   WriteLambda write_lambda;
 };
 
-// ModbusTCPController::create_register_ranges_ tries to optimize register range
+// ModbusController::create_register_ranges_ tries to optimize register range
 // for this the sensors must be ordered by register_type, start_address and bitmask
 class SensorItemsComparator {
  public:
@@ -365,7 +351,7 @@ struct RegisterRange {
 class ModbusCommandItem {
  public:
   static const size_t MAX_PAYLOAD_BYTES = 240;
-  ModbusTCPController *modbusdevice{nullptr};
+  ModbusController *modbusdevice{nullptr};
   uint16_t register_address{0};
   uint16_t register_count{0};
   ModbusFunctionCode function_code{ModbusFunctionCode::CUSTOM};
@@ -388,7 +374,7 @@ class ModbusCommandItem {
    * @return ModbusCommandItem with the prepared command
    */
   static ModbusCommandItem create_read_command(
-      ModbusTCPController *modbusdevice, ModbusRegisterType register_type, uint16_t start_address, uint16_t register_count,
+      ModbusController *modbusdevice, ModbusRegisterType register_type, uint16_t start_address, uint16_t register_count,
       std::function<void(ModbusRegisterType register_type, uint16_t start_address, const std::vector<uint8_t> &data)>
           &&handler);
   /** Create modbus read command
@@ -399,7 +385,7 @@ class ModbusCommandItem {
    * @param register_count number of registers to read
    * @return ModbusCommandItem with the prepared command
    */
-  static ModbusCommandItem create_read_command(ModbusTCPController *modbusdevice, ModbusRegisterType register_type,
+  static ModbusCommandItem create_read_command(ModbusController *modbusdevice, ModbusRegisterType register_type,
                                                uint16_t start_address, uint16_t register_count);
   /** Create modbus read command
    *  Function code 02-04
@@ -410,7 +396,7 @@ class ModbusCommandItem {
    * @param handler function called when the response is received
    * @return ModbusCommandItem with the prepared command
    */
-  static ModbusCommandItem create_write_multiple_command(ModbusTCPController *modbusdevice, uint16_t start_address,
+  static ModbusCommandItem create_write_multiple_command(ModbusController *modbusdevice, uint16_t start_address,
                                                          uint16_t register_count, const std::vector<uint16_t> &values);
   /** Create modbus write multiple registers command
    *  Function 16 (10hex) Write Multiple Registers
@@ -420,7 +406,7 @@ class ModbusCommandItem {
    * @param value uint16_t single register value to write
    * @return ModbusCommandItem with the prepared command
    */
-  static ModbusCommandItem create_write_single_command(ModbusTCPController *modbusdevice, uint16_t start_address,
+  static ModbusCommandItem create_write_single_command(ModbusController *modbusdevice, uint16_t start_address,
                                                        uint16_t value);
   /** Create modbus write single registers command
    *  Function 05 (05hex) Write Single Coil
@@ -429,7 +415,7 @@ class ModbusCommandItem {
    * @param value uint16_t data to be written to the registers
    * @return ModbusCommandItem with the prepared command
    */
-  static ModbusCommandItem create_write_single_coil(ModbusTCPController *modbusdevice, uint16_t address, bool value);
+  static ModbusCommandItem create_write_single_coil(ModbusController *modbusdevice, uint16_t address, bool value);
 
   /** Create modbus write multiple registers command
    *  Function 15 (0Fhex) Write Multiple Coils
@@ -438,7 +424,7 @@ class ModbusCommandItem {
    * @param value bool vector of values to be written to the registers
    * @return ModbusCommandItem with the prepared command
    */
-  static ModbusCommandItem create_write_multiple_coils(ModbusTCPController *modbusdevice, uint16_t start_address,
+  static ModbusCommandItem create_write_multiple_coils(ModbusController *modbusdevice, uint16_t start_address,
                                                        const std::vector<bool> &values);
   /** Create custom modbus command
    * @param modbusdevice pointer to the device to execute the command
@@ -448,7 +434,7 @@ class ModbusCommandItem {
    * @return ModbusCommandItem with the prepared command
    */
   static ModbusCommandItem create_custom_command(
-      ModbusTCPController *modbusdevice, const std::vector<uint8_t> &values,
+      ModbusController *modbusdevice, const std::vector<uint8_t> &values,
       std::function<void(ModbusRegisterType register_type, uint16_t start_address, const std::vector<uint8_t> &data)>
           &&handler = nullptr);
 
@@ -460,7 +446,7 @@ class ModbusCommandItem {
    * @return ModbusCommandItem with the prepared command
    */
   static ModbusCommandItem create_custom_command(
-      ModbusTCPController *modbusdevice, const std::vector<uint16_t> &values,
+      ModbusController *modbusdevice, const std::vector<uint16_t> &values,
       std::function<void(ModbusRegisterType register_type, uint16_t start_address, const std::vector<uint8_t> &data)>
           &&handler = nullptr);
 
@@ -476,11 +462,11 @@ class ModbusCommandItem {
  *   Each instance handles the modbus commuinication for all sensors with the same modbus address
  *
  * all sensor items (sensors, switches, binarysensor ...) are parsed in modbus address ranges.
- * when esphome calls ModbusTCPController::Update the commands for each range are created and sent
+ * when esphome calls ModbusController::Update the commands for each range are created and sent
  * Responses for the commands are dispatched to the modbus sensor items.
  */
 
-class ModbusTCPController : public PollingComponent, public modbustcp::ModbusDevice {
+class ModbusController : public PollingComponent, public modbus::ModbusDevice {
  public:
   void dump_config() override;
   void loop() override;
@@ -531,6 +517,12 @@ class ModbusTCPController : public PollingComponent, public modbustcp::ModbusDev
   void set_max_cmd_retries(uint8_t max_cmd_retries) { this->max_cmd_retries_ = max_cmd_retries; }
   /// get how many times a command will be (re)sent if no response is received
   uint8_t get_max_cmd_retries() { return this->max_cmd_retries_; }
+  /// Called by esphome generated code to set the server courtesy response object
+  void set_server_courtesy_response(const ServerCourtesyResponse &server_courtesy_response) {
+    this->server_courtesy_response_ = server_courtesy_response;
+  }
+  /// Get the server courtesy response object
+  ServerCourtesyResponse get_server_courtesy_response() const { return this->server_courtesy_response_; }
 
  protected:
   /// parse sensormap_ and create range of sequential addresses
@@ -573,6 +565,9 @@ class ModbusTCPController : public PollingComponent, public modbustcp::ModbusDev
   CallbackManager<void(int, int)> online_callback_{};
   /// Server offline callback
   CallbackManager<void(int, int)> offline_callback_{};
+  /// Server courtesy response
+  ServerCourtesyResponse server_courtesy_response_{
+      .enabled = false, .register_last_address = 0xFFFF, .register_value = 0};
 };
 
 /** Convert vector<uint8_t> response payload to float.
@@ -607,5 +602,5 @@ inline std::vector<uint16_t> float_to_payload(float value, SensorValueType value
   return data;
 }
 
-}  // namespace modbustcp_controller
+}  // namespace modbus_controller
 }  // namespace esphome

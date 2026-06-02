@@ -1,4 +1,4 @@
-#include "modbustcp_binarysensor.h"
+#include "modbus_binarysensor.h"
 #include "esphome/core/log.h"
 
 namespace esphome {
@@ -6,9 +6,9 @@ namespace modbustcp_controller {
 
 static const char *const TAG = "modbustcp_controller.binary_sensor";
 
-void ModbusTCPBinarySensor::dump_config() { LOG_BINARY_SENSOR("", "Modbus Controller Binary Sensor", this); }
+void ModbusBinarySensor::dump_config() { LOG_BINARY_SENSOR("", "Modbus Controller Binary Sensor", this); }
 
-void ModbusTCPBinarySensor::parse_and_publish(const std::vector<uint8_t> &data) {
+void ModbusBinarySensor::parse_and_publish(const std::vector<uint8_t> &data) {
   bool value;
 
   switch (this->register_type) {
@@ -34,5 +34,5 @@ void ModbusTCPBinarySensor::parse_and_publish(const std::vector<uint8_t> &data) 
   this->publish_state(value);
 }
 
-}  // namespace modbus_controller
+}  // namespace modbustcp_controller
 }  // namespace esphome

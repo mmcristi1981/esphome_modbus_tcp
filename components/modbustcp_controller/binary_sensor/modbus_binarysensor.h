@@ -1,7 +1,7 @@
 #pragma once
 
 #include "esphome/components/binary_sensor/binary_sensor.h"
-#include "esphome/components/modbustcp_controller/modbustcp_controller.h"
+#include "esphome/components/modbustcp_controller/modbus_controller.h"
 #include "esphome/core/component.h"
 
 #include <vector>
@@ -9,9 +9,9 @@
 namespace esphome {
 namespace modbustcp_controller {
 
-class ModbusTCPBinarySensor : public Component, public binary_sensor::BinarySensor, public SensorItem {
+class ModbusBinarySensor : public Component, public binary_sensor::BinarySensor, public SensorItem {
  public:
-  ModbusTCPBinarySensor(ModbusRegisterType register_type, uint16_t start_address, uint8_t offset, uint32_t bitmask,
+  ModbusBinarySensor(ModbusRegisterType register_type, uint16_t start_address, uint8_t offset, uint32_t bitmask,
                      uint16_t skip_updates, bool force_new_range) {
     this->register_type = register_type;
     this->start_address = start_address;
@@ -33,7 +33,7 @@ class ModbusTCPBinarySensor : public Component, public binary_sensor::BinarySens
 
   void dump_config() override;
 
-  using transform_func_t = optional<bool> (*)(ModbusTCPBinarySensor *, bool, const std::vector<uint8_t> &);
+  using transform_func_t = optional<bool> (*)(ModbusBinarySensor *, bool, const std::vector<uint8_t> &);
   void set_template(transform_func_t f) { this->transform_func_ = f; }
 
  protected:

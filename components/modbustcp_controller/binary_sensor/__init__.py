@@ -9,13 +9,13 @@ from .. import (
     SensorItem,
     add_modbus_base_properties,
     modbus_calc_properties,
-    modbustcp_controller_ns,
+    modbus_controller_ns,
     validate_modbus_register,
 )
 from ..const import (
     CONF_BITMASK,
     CONF_FORCE_NEW_RANGE,
-    CONF_MODBUSTCP_CONTROLLER_ID,
+    CONF_MODBUS_CONTROLLER_ID,
     CONF_REGISTER_TYPE,
     CONF_SKIP_UPDATES,
 )
@@ -24,12 +24,12 @@ DEPENDENCIES = ["modbustcp_controller"]
 CODEOWNERS = ["@martgras"]
 
 
-ModbusTCPBinarySensor = modbustcp_controller_ns.class_(
-    "ModbusTCPBinarySensor", cg.Component, binary_sensor.BinarySensor, SensorItem
+ModbusBinarySensor = modbustcp_controller_ns.class_(
+    "ModbusBinarySensor", cg.Component, binary_sensor.BinarySensor, SensorItem
 )
 
 CONFIG_SCHEMA = cv.All(
-    binary_sensor.binary_sensor_schema(ModbusTCPBinarySensor)
+    binary_sensor.binary_sensor_schema(ModbusBinarySensor)
     .extend(cv.COMPONENT_SCHEMA)
     .extend(ModbusItemBaseSchema)
     .extend(
@@ -55,6 +55,6 @@ async def to_code(config):
     await cg.register_component(var, config)
     await binary_sensor.register_binary_sensor(var, config)
 
-    paren = await cg.get_variable(config[CONF_MODBUSTCP_CONTROLLER_ID])
+    paren = await cg.get_variable(config[CONF_MODBUS_CONTROLLER_ID])
     cg.add(paren.add_sensor_item(var))
-    await add_modbus_base_properties(var, config, ModbusTCPBinarySensor, bool, bool)
+    await add_modbus_base_properties(var, config, ModbusBinarySensor, bool, bool)
