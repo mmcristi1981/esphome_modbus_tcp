@@ -1,9 +1,6 @@
 # Fork that attempts to allow parallel use of both modbustcp TCP and esphome native modbus RTU
 # Includes [text](components/exampleTCP_RTU_huawei_delta_max_basic.yaml) example tested on esp32-WROOM-32U board with RTU to RS485 conversion board. Connects via esphome native modbus RTU to ev charger, and via modbus TCP over wifi to huawei inverter to read grid power and solar production. Feel free to adapt params and logic according to your needs
-# Shoutout to creepystefan, hope i'm not too creepy myself for forking his work without explicit permission
-
-# Universal Modbus-TCP esphome
-# Modbus_TCP (nearly same as original modbus (rtu)  
+# Use components/modsbustcp and modbustcp-controller to avoid overwriting the native RTU modbus of esphome and allow parallel use (RTU + TCP)
 
 # Framework IDF or Arduino
 
