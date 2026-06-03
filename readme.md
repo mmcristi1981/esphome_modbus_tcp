@@ -16,7 +16,14 @@ external_components:
 modbustcp:
   - id: my_tcp_modbus
     type: TCP
-    host: ${modbus_ip}
-    port: ${modbus_port}
-    send_wait_time: ${poll_interval}
+    host: 192.168.1.100 # your modbus device IP address
+    port: 502 # your device modbus port
+    send_wait_time: 5s
+
+modbustcp_controller:
+  - id: my_modbus_controller
+    modbustcp_id: my_tcp_modbus
+    address: 1
+    update_interval: 5s
+    setup_priority: -100
 ```
