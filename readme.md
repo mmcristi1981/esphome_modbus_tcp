@@ -6,6 +6,17 @@
 
 # for modbus TCP
 ```yaml
+
+esphome:
+  name: example-controller
+  platformio_options:
+    lib_ldf_mode: chain+
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
 external_components:
   - source: github://robertklep/esphome-custom-component
     components: [ custom, custom_component ]
