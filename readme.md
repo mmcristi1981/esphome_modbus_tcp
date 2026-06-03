@@ -7,29 +7,16 @@
 # for modbus TCP
 ```yaml
 external_components:
-  - source: github://creepystefan/esphome_tcp
+  - source: github://robertklep/esphome-custom-component
+    components: [ custom, custom_component ]
+  - source: github://mmcristi1981/esphome_modbus_tcp
+    components: [ modbustcp, modbustcp_controller ]
     refresh: 0s
-esphome:
-  min_version: 2026.2.4
-  
-modbus:
-  - id: modbustesttcp
-    type: TCP               # RTU no use please
-    host: 192.168.178.46    # Required
-    port: 502               # Optional 502 is default
-    send_wait_time: 250ms   # Optional 250ms is default
+
+modbustcp:
+  - id: my_tcp_modbus
+    type: TCP
+    host: ${modbus_ip}
+    port: ${modbus_port}
+    send_wait_time: ${poll_interval}
 ```
-all Components orignal from ESPHOME
-
-in modbus_controller:  address = UNIT ID
-platform: modbus_controller
-sensor
-number
-switch
-textsensor
-....
-
-
-# useful link
-https://ipc2u.de/artikel/wissenswertes/detaillierte-beschreibung-des-modbus-tcp-protokolls-mit-befehlsbeispielen/
-# https://github.com/Gucioo/esphome_modbus_tcp_master
