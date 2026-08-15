@@ -2,23 +2,34 @@
 #DISCLAIMER: EV charge control not fully tested
 #TODO
 substitutions:
+  wifi_ssid: "***"
+  wifi_ssid_ap: "***"
+  wifi_pass: "***"
+
   huawei_ip: "192.168.1.100"
   huawei_port: "502"
-  huawei_poll: "1000ms"
+  huawei_poll: "2000ms"
 
   ev_rx_pin: GPIO16
   ev_tx_pin: GPIO17
   ev_modbus_address: "1"
+  ev_modbus_baud_rate: 19200
 
-  ev_min_current_a: "6"
-  ev_voltage: "230"
-  ev_line_voltage: "400"
-  ev_phases: "3"
+  ev_min_charge_power: "5000"
 
   ev_max_charge_power_w: "10000"
   max_grid_import_w: "6000"
-  emergency_grid_import_w: "12000"
+  emergency_grid_import_w: "10000"
   ramp_step_w: "500"
+
+  # Delta EV Charger communication watchdog/fallback registers (charger-level, no EVSE offset)
+  # Register 201: Communication Timeout ENABLE, UINT16, 0=disabled, 1=enabled
+  # Register 202: Communication Timeout, UINT16 seconds, 0=deactivate, 1..600 seconds
+  # Register 203: Fallback Power, UINT32 watts
+  ev_use_communication_timeout: "true"
+  ev_communication_timeout_s: "60"
+  ev_fallback_power_w: "5000"
+  ev_power_limit_keepalive_s: "10"
 
 esphome:
   name: ev-dynamic-controller
@@ -45,24 +56,25 @@ captive_portal:
 web_server:
 
 wifi:
-  ssid: #replace with your wifi where huawei inverter modbus is accessible
-  password: #replace with your wifi password
+  ssid: ${wifi_ssid}
+  password: ${wifi_pass}
 
 
   ap:
-    ssid: "" # replace with your ssid for AP backup
-    password: "" #replace with your backup AP pass
+    ssid: ${wifi_ssid_ap}
+    password: ${wifi_pass}
 
 logger:
+  baud_rate: 0
 
 api:
-
+  reboot_timeout: 0s
 
 uart:
   id: delta_uart
   rx_pin: ${ev_rx_pin}
   tx_pin: ${ev_tx_pin}
-  baud_rate: 19200
+  baud_rate: ${ev_modbus_baud_rate}
   parity: NONE
   stop_bits: 1
   data_bits: 8
@@ -72,21 +84,15 @@ uart:
 modbus:
   - id: delta_modbus
     uart_id: delta_uart
-    send_wait_time: 250ms
+    send_wait_time: 500ms
+    turnaround_time: 250ms
 
 modbustcp:
   - id: huawei_modbus
     type: TCP
     host: ${huawei_ip}
     port: ${huawei_port}
-    send_wait_time: ${huawei_poll}
-
-modbustcp_controller:
-  - id: huawei
-    modbustcp_id: huawei_modbus
-    address: 1
-    update_interval: 5s
-    setup_priority: -100
+    send_wait_time: 250ms
 
 modbus_controller:
   - id: delta
@@ -94,17 +100,51 @@ modbus_controller:
     address: ${ev_modbus_address}
     setup_priority: -10
     update_interval: 2s
-    
-globals:
-  - id: last_evse_state
-    type: int
-    restore_value: no
-    initial_value: "-1"
+    command_throttle: 100ms
+    allow_duplicate_commands: true
+    max_cmd_retries: 2
 
+modbustcp_controller:
+  - id: huawei
+    modbustcp_id: huawei_modbus
+    address: 1
+    update_interval: ${huawei_poll}
+    command_throttle: 100ms
+    allow_duplicate_commands: true
+    setup_priority: -100
+    max_cmd_retries: 2
+
+globals:
   - id: ev_target_power_w
     type: int
     restore_value: no
     initial_value: "0"
+
+  - id: ev_use_comm_timeout
+    type: bool
+    restore_value: yes
+    initial_value: ${ev_use_communication_timeout}
+
+  - id: ev_last_power_limit_write_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
+
+switch:
+  - platform: template
+    id: ev_communication_timeout_watchdog
+    name: "EV Communication Timeout Watchdog"
+    restore_mode: RESTORE_DEFAULT_ON
+    lambda: |-
+      return id(ev_use_comm_timeout);
+    turn_on_action:
+      - lambda: |-
+          id(ev_use_comm_timeout) = true;
+          ESP_LOGI("ev", "Communication timeout watchdog enabled");
+    turn_off_action:
+      - lambda: |-
+          id(ev_use_comm_timeout) = false;
+          ESP_LOGI("ev", "Communication timeout watchdog disabled");
 
 number:
   - platform: modbus_controller
@@ -114,8 +154,44 @@ number:
     internal: true
     address: 1600
     value_type: S_DWORD
-    min_value: 0
+    min_value: -1
     max_value: 11000
+    step: 100
+    use_write_multiple: true
+
+  - platform: modbus_controller
+    modbus_controller_id: delta
+    id: ev_comm_timeout_enable_set
+    name: "EV Communication Timeout Enable Set"
+    internal: true
+    address: 201
+    value_type: U_WORD
+    min_value: 0
+    max_value: 1
+    step: 1
+    use_write_multiple: true
+
+  - platform: modbus_controller
+    modbus_controller_id: delta
+    id: ev_comm_timeout_seconds_set
+    name: "EV Communication Timeout Seconds Set"
+    internal: true
+    address: 202
+    value_type: U_WORD
+    min_value: 0
+    max_value: 600
+    step: 1
+    use_write_multiple: true
+
+  - platform: modbus_controller
+    modbus_controller_id: delta
+    id: ev_fallback_power_set
+    name: "EV Fallback Power Set"
+    internal: true
+    address: 203
+    value_type: U_DWORD
+    min_value: 0
+    max_value: ${ev_max_charge_power_w}
     step: 100
     use_write_multiple: true
 
@@ -152,92 +228,161 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: delta
-    name: "EV Charging Current"
-    id: delta_current
-    register_type: read
-    address: 1007
-    value_type: U_DWORD
-    unit_of_measurement: A
-    filters:
-      - multiply: 0.01
-
-  - platform: modbus_controller
-    modbus_controller_id: delta
     name: "EVSE State"
     id: evse_state
     register_type: read
     address: 1000
     value_type: U_WORD
-    internal: true
+
+  - platform: modbus_controller
+    modbus_controller_id: delta
+    id: ev_power_limit_readback
+    name: "EV Charger Power Limit Readback"
+    register_type: holding
+    address: 1600
+    value_type: S_DWORD
+    accuracy_decimals: 0
+
+  - platform: modbus_controller
+    modbus_controller_id: delta
+    name: "EV Communication Timeout Enable"
+    id: ev_comm_timeout_enable
+    register_type: holding
+    address: 201
+    value_type: U_WORD
+
+  - platform: modbus_controller
+    modbus_controller_id: delta
+    name: "EV Communication Timeout Seconds"
+    id: ev_comm_timeout_seconds
+    register_type: holding
+    address: 202
+    value_type: U_WORD
+    unit_of_measurement: s
+
+  - platform: modbus_controller
+    modbus_controller_id: delta
+    name: "EV Fallback Power"
+    id: ev_fallback_power
+    register_type: holding
+    address: 203
+    value_type: U_DWORD
+    unit_of_measurement: W
 
 # -----------------------------
-# LOG OUTPUT (DEBUG LOOP)
+# COMMS TIMEOUTS
 # -----------------------------
 interval:
-  - interval: 5s
+  - interval: 30s
+    then:
+      - lambda: |-
+          const bool use_timeout = id(ev_use_comm_timeout);
+          const int desired_enable = use_timeout ? 1 : 0;
+          const int desired_timeout = use_timeout ? ${ev_communication_timeout_s} : 0;
+          const int desired_fallback = use_timeout ? ${ev_fallback_power_w} : 0;
+
+          if (isnan(id(ev_comm_timeout_enable).state) || (int) id(ev_comm_timeout_enable).state != desired_enable) {
+            ESP_LOGI("ev", "Setting register 201 Communication Timeout Enable to %d (current %.0f)", desired_enable, id(ev_comm_timeout_enable).state);
+            auto call = id(ev_comm_timeout_enable_set).make_call();
+            call.set_value(desired_enable);
+            call.perform();
+          }
+
+          if (isnan(id(ev_comm_timeout_seconds).state) || (int) id(ev_comm_timeout_seconds).state != desired_timeout) {
+            ESP_LOGI("ev", "Setting register 202 Communication Timeout Seconds to %d (current %.0f)", desired_timeout, id(ev_comm_timeout_seconds).state);
+            auto call = id(ev_comm_timeout_seconds_set).make_call();
+            call.set_value(desired_timeout);
+            call.perform();
+          }
+
+          if (isnan(id(ev_fallback_power).state) || (int) id(ev_fallback_power).state != desired_fallback) {
+            ESP_LOGI("ev", "Setting register 203 Fallback Power to %d (current %.0f)", desired_fallback, id(ev_fallback_power).state);
+            auto call = id(ev_fallback_power_set).make_call();
+            call.set_value(desired_fallback);
+            call.perform();
+          }
+
+# -----------------------------
+# LOG OUTPUT (MAIN LOOP)
+# -----------------------------
+  - interval: 4s
     then:
       - logger.log:
           format: "PV: %.1f W | Grid: %.1f W"
           args: [ 'id(pv_power).state', 'id(grid_power).state' ]
       - lambda: |-
-          if (isnan(id(grid_power).state) || isnan(id(evse_state).state)) {
-            ESP_LOGD("ev", "Waiting for valid grid/EVSE values");
-            return;
-          }
-
-          const int min_power = (int)(1.732 * ${ev_line_voltage} * ${ev_min_current_a});
+          
+          const int min_power = (int)${ev_min_charge_power};
           const int max_charge = ${ev_max_charge_power_w};
-          const int max_grid = ${max_grid_import_w};
+          const int max_grid_import = ${max_grid_import_w};
           const int emergency_grid = ${emergency_grid_import_w};
           const int step = ${ramp_step_w};
-
-          const float grid = id(grid_power).state;
+          const float grid = -id(grid_power).state;
+          const int currentTargetSensor = (int)(id(ev_power_limit_readback).state);
+          
           const int state = (int) id(evse_state).state;
-
-          const char* state_text = "Unknown";
-
-          switch (state) {
-            case 0: state_text = "Charging process not started (no vehicle connected)"; break;
-            case 1: state_text = "Connected, waiting for release"; break;
-            case 2: state_text = "Charging process starts"; break;
-            case 3: state_text = "Charging"; break;
-            case 4: state_text = "Suspended (loading paused)"; break;
-            case 5: state_text = "Charging process successfully completed (vehicle still plugged in)"; break;
-            case 6: state_text = "Charging process completed by user (vehicle still plugged in)"; break;
-            case 7: state_text = "Charging ended with error (vehicle still connected)"; break;
-          }
-
-          if (state != id(last_evse_state)) {
-            ESP_LOGI("ev", "EVSE state changed: %d = %s", state, state_text);
-            id(last_evse_state) = state;
-          }
-
-          // Delta EVSE state: 0 unavailable, 1 available, 2 occupied,
-          // 3 preparing, 4 charging, etc.
-          const bool car_plugged = state >= 2 && state <= 7;
-
+          ESP_LOGD("ev", "Current state %d", state);
+          
+          // Delta EVSE state:
+          // 0: Unavailable
+          // 1: Available
+          // 2: Occupied
+          // 3: Preparing
+          // 4: Charging
+          // 5: Finishing
+          // 6: Suspended EV
+          // 7: Suspended EVSE
+          // 8: Not ready
+          
           int target = id(ev_target_power_w);
-
-          if (!car_plugged) {
+          
+          if (isnan(id(grid_power).state) || isnan(state)) {
             target = 0;
-          } else {
-            if (target == 0 && grid < max_grid) {
+          } else if (state <= 3) {
+            if (grid > max_grid_import - min_power) {
+                target = 0;
+            } else {
+                target = min_power;
+            }
+          } else if (state == 4) {
+            if (target <= 0 && grid < max_grid_import - min_power) {
               target = min_power;
             } else if (grid > emergency_grid && target <= min_power) {
               target = 0;
-            } else if (grid > max_grid) {
-              target -= (int)(grid - max_grid);
-            } else if (grid < max_grid && target > 0) {
+            } else if (grid > max_grid_import) {
+              target -= (int)(grid - max_grid_import);
+            } else if (grid < max_grid_import && target > 0) {
               target += step;
             }
-            if (target < 0) target = 0;
+            
+            //wait for sensor to catch up with target
+            if (currentTargetSensor > 0 && target > currentTargetSensor + step) {
+                target = currentTargetSensor + step;
+            }
+            if (target <= 0) target = 0;
             if (target > max_charge) target = max_charge;
             if (target > 0 && target < min_power) target = min_power;
+          } else if (state == 5){
+            target = min_power;
+          } else {
+            target = -1;
           }
-
-          if (target != id(ev_target_power_w)) {
+          
+          ESP_LOGD("ev", "Target Power %dW", target);
+          
+          const uint32_t now_ms = millis();
+          const bool target_changed = target != id(ev_target_power_w);
+          const bool keepalive_due = id(ev_use_comm_timeout) &&
+            (id(ev_last_power_limit_write_ms) == 0 ||
+             now_ms - id(ev_last_power_limit_write_ms) >= (uint32_t)(${ev_power_limit_keepalive_s} * 1000));
+          
+          
+          if (keepalive_due || target <=0 || target > 0 && (currentTargetSensor < target - 1 || currentTargetSensor > target + 1)) {
             ESP_LOGD("ev", "EV state=%d grid=%.0fW -> charge limit %dW", state, grid, target);
+            
             id(ev_target_power_w) = target;
+            id(ev_last_power_limit_write_ms) = now_ms;
+            
             auto call = id(ev_power_limit).make_call();
             call.set_value(target);
             call.perform();
