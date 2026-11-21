@@ -34,7 +34,7 @@ MODBUS_ROLES = {
 
 
 MULTI_CONF = True
-AUTO_LOAD = ["uart", "async_tcp"]
+AUTO_LOAD = ["uart", "socket"]
 DEPENDENCIES = ['network']
 
 
